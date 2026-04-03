@@ -2,7 +2,7 @@ using Unity.VisualScripting;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 
-public class NewMonoBehaviourScript : MonoBehaviour
+public class PlayerMovement : MonoBehaviour
 {
     private float moveSpeed;
 
@@ -55,16 +55,23 @@ public class NewMonoBehaviourScript : MonoBehaviour
     private float originalHeight;
     private Vector3 originalCenter;
 
+    private Grappling g;
+
     public enum MovementState
     {
+        freeze,
         walking,
         sprinting,
         crouching,
         air
     }
 
+    public bool freeze;
+    public bool activeGrapple;
     void Start()
     {
+        g = GetComponent<Grappling>();
+        
         col = GetComponentInChildren<CapsuleCollider>();
         originalHeight = col.height;
         originalCenter = col.center;
@@ -85,7 +92,7 @@ public class NewMonoBehaviourScript : MonoBehaviour
         SpeedControl();
         StateHandler();
 
-        if (grounded)
+        if (grounded && !activeGrapple)
         {
             rb.linearDamping = groundDrag;
         }
@@ -140,7 +147,14 @@ public class NewMonoBehaviourScript : MonoBehaviour
 
     private void StateHandler()
 {
-    if (Input.GetKey(crouchKey))
+    if (freeze)
+    {
+        state = MovementState.freeze;
+        moveSpeed = 0;
+        rb.linearVelocity = Vector3.zero;
+    }
+
+    else if (Input.GetKey(crouchKey))
     {
         state = MovementState.crouching;
         moveSpeed = crouchSpeed;
@@ -166,6 +180,8 @@ public class NewMonoBehaviourScript : MonoBehaviour
 
     private void MovePlayer()
     {
+        if (activeGrapple) return;
+
         moveDirection = orientation.forward * verticalInput + orientation.right * horizontalInput;
 
         if (OnSlope() && !existingSlope)
@@ -187,6 +203,8 @@ public class NewMonoBehaviourScript : MonoBehaviour
 
     private void SpeedControl()
     {
+        if (activeGrapple) return;
+
         if (OnSlope() && !existingSlope)
         {
             if(rb.linearVelocity.magnitude > moveSpeed)
@@ -217,6 +235,42 @@ public class NewMonoBehaviourScript : MonoBehaviour
         readyToJump = true;
         existingSlope = false;
     }
+
+    private bool enableMovementOnNextTouch;
+    public void JumpToPosition(Vector3 targetPosition, float trajectoryHeight)
+    {
+        activeGrapple = true;
+
+        velocityToSet = CalculateJumpVelocity(transform.position, targetPosition, trajectoryHeight);
+
+        Vector3 direction = (targetPosition - transform.position).normalized;
+        velocityToSet += direction * g.pushMultiplier;
+
+        Invoke(nameof(SetVelocity), 0.1f);
+    }
+
+    private Vector3 velocityToSet;
+    private void SetVelocity()
+    {
+        enableMovementOnNextTouch = true;
+        rb.linearVelocity = velocityToSet;
+    }
+
+    public void ResetRestrictions()
+    {
+        activeGrapple = false;
+    }
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (enableMovementOnNextTouch)
+        {
+            enableMovementOnNextTouch = false;
+            ResetRestrictions();
+
+            GetComponent<Grappling>().StopGrapple();
+        }
+    }
+
     private bool OnSlope()
     {
         if(Physics.Raycast(transform.position, Vector3.down, out slopeHit, playerHeight * 0.5f + 0.3f))
@@ -231,6 +285,19 @@ public class NewMonoBehaviourScript : MonoBehaviour
     private Vector3 GetSlopeMoveDirection()
     {
         return Vector3.ProjectOnPlane(moveDirection, slopeHit.normal).normalized;
+    }
+
+    public Vector3 CalculateJumpVelocity(Vector3 startPoint, Vector3 endPoint, float trajectoryHeight)
+    {
+        float gravity = Physics.gravity.y;
+        float displacementY = endPoint.y - startPoint.y;
+        Vector3 displacementXZ = new Vector3(endPoint.x - startPoint.x, 0f, endPoint.z - startPoint.z);
+
+        Vector3 velocityY = Vector3.up * Mathf.Sqrt(-2 * gravity * trajectoryHeight);
+        Vector3 velocityXZ = displacementXZ / (Mathf.Sqrt(-2 * trajectoryHeight / gravity) 
+            + Mathf.Sqrt(2 * (displacementY - trajectoryHeight) / gravity));
+
+        return velocityXZ + velocityY;
     }
 }
 
